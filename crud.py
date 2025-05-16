@@ -59,5 +59,13 @@ class CRUD:
     async def notification(self,async_session:async_sessionmaker[AsyncSession],log_notification:Notification):
         async with async_session() as session:
             session.add(log_notification)
+            
             await session.commit()
 
+    async def get_notification(self,async_session:async_sessionmaker[AsyncSession],notification_user_licensenumber:str):
+        async with async_session() as session:
+            statement = select(Notification).filter(Notification.user_licensenumber == notification_user_licensenumber)
+
+            result = await session.execute(statement)
+
+            return result.scalars().one()

@@ -2,28 +2,30 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from crud import CRUD
 from db import engine 
-from typing import List
 from models import User , Vehicle ,Traffic ,Video , VehicleOwnership , RuleViolation , Notification
 from http import HTTPStatus
-from fastapi import HTTPException
+from fastapi import HTTPException # for websockets
+from schemas import UserCreate, UserLogin, VehicleCreate ,TrafficRegister ,VideoUpload , OwnershipRegister , RegisterRuleViolation , NotificationSystem
 
-from fastapi import WebSocket , WebSocketDisconnect , Depends
-from typing import Dict
+#web sockets
+from fastapi import WebSocket,WebSocketDisconnect
+from typing import List, Dict
+
+from fastapi.middleware.cors import CORSMiddleware
+from ws_manager import endpoints as websocket_routes
+from ws_manager.websocket_manager import send_notification_to_user
+from fastapi import BackgroundTasks
+
+from ws_manager.websocket_manager import connect_user,disconnect_user
 
 
 
-from schemas import UserCreate
-from schemas import UserLogin
-from schemas import   VehicleCreate ,TrafficRegister ,VideoUpload , OwnershipRegister , RegisterRuleViolation , NotificationSystem
-
-
-import schemas,models
 
 
 app = FastAPI(
     #swagger UI
-    title = "Noted API",
-    description= "This is a simple note taking service",
+    title = "API for Rule Violation",
+    description= "This is a simple rule vioaltion APIS ",
     docs_url="/"
 )
 
@@ -34,11 +36,30 @@ session = async_sessionmaker(
 
 db = CRUD()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+active_connections: Dict[str,WebSocket] ={}
+
+app.include_router(websocket_routes.router)
 
 
+@app.websocket("/ws/notifications/{license_number}")
+async def websocket_endpoint(websocket: WebSocket, license_number: str):
+    await connect_user(license_number,websocket)
 
-
-
+    try:
+        while True:
+            data = await websocket.receive_text()
+            print(f"Received from {license_number}: {data}")
+            await websocket.send_text(f"Echo: {data}")
+    except WebSocketDisconnect:
+        print(f"Client disconnected: {license_number}")
+        disconnect_user(license_number)
 
 @app.post('/register/',status_code=HTTPStatus.CREATED)
 async def create_user(user_data: UserCreate):
@@ -140,7 +161,7 @@ async def register_ruleviolation(violation_data: RegisterRuleViolation):
 
 
 @app.post("/notification/",status_code=HTTPStatus.CREATED)
-async def log_notification(notification_data: NotificationSystem):
+async def log_notification(notification_data: NotificationSystem,background_task:BackgroundTasks):
 
     naive_notification_time = notification_data.notification_senttimestamp.replace(tzinfo=None)
     new_notification = Notification(
@@ -151,7 +172,15 @@ async def log_notification(notification_data: NotificationSystem):
         user_licensenumber = notification_data.user_licensenumber
 
     )
+    
     notification = await db.register_ruleviolation(session,new_notification)
+    background_task.add_task(send_notification_to_user,notification_data.user_licensenumber,notification_data.notification_message)
+    return notification
+
+@app.get("/notification/{licensenumber}")
+async def get_notification_by_licencenumber(licensenumber):
+    notification = await db.get_notification(session,licensenumber)
+    
 
     return notification
 
@@ -167,3 +196,23 @@ async def log_notification(notification_data: NotificationSystem):
 
 
 
+
+'''@app.websocket("/ws/notifications/{license_number}")
+async def websocket_endpoint(websocket: WebSocket, license_number: str):
+    await websocket.accept()
+    active_connections[license_number] = websocket
+    print(f"Client connected: {license_number}")
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            print(f"Received from {license_number}: {data}")
+
+            # Optionally echo or broadcast to this specific license
+            await websocket.send_text(f"Echo: {data}")
+
+    except WebSocketDisconnect:
+        print(f"Client disconnected: {license_number}")
+        # Safely remove the disconnected websocket
+        active_connections.pop(license_number, None)
+'''
